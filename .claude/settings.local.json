@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx eslint:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install:*)",
+      "Bash(npx prettier:*)",
+      "Bash(npx vite build)",
+      "Bash(npx firebase:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run seed:admin:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(gcloud run services update:*)"
+    ]
+  }
+}
