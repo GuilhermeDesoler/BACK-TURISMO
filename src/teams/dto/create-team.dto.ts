@@ -43,6 +43,11 @@ export class CreateTeamDto {
   @IsBoolean()
   isActive?: boolean;
 
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  maxPeople: number;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OperatingHoursDto)

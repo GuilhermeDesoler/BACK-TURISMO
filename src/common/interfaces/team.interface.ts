@@ -9,6 +9,7 @@ export interface Team {
   id: string;
   name: string;
   isActive: boolean;
+  maxPeople: number;
   operatingHours: TeamOperatingHours[];
   createdAt: Date;
   updatedAt: Date;

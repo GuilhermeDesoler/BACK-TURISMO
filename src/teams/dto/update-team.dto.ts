@@ -3,6 +3,9 @@ import {
   IsOptional,
   IsBoolean,
   IsArray,
+  IsNumber,
+  Min,
+  Max,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -16,6 +19,12 @@ export class UpdateTeamDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  maxPeople?: number;
 
   @IsOptional()
   @IsArray()

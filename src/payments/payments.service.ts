@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import { MercadoPagoConfig, Payment, Preference, PaymentRefund } from 'mercadopago';
 import { Environment } from '../common/config/environment';
 
 @Injectable()
@@ -7,6 +7,7 @@ export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
   private paymentClient: Payment | null = null;
   private preferenceClient: Preference | null = null;
+  private refundClient: PaymentRefund | null = null;
   private readonly mockMode: boolean;
 
   constructor() {
@@ -16,6 +17,7 @@ export class PaymentsService {
       const client = new MercadoPagoConfig({ accessToken });
       this.paymentClient = new Payment(client);
       this.preferenceClient = new Preference(client);
+      this.refundClient = new PaymentRefund(client);
       this.mockMode = false;
     } else {
       this.logger.warn('MercadoPago nao configurado - pagamentos em modo MOCK');
@@ -87,6 +89,9 @@ export class PaymentsService {
     type: 'DEPOSIT' | 'FINAL';
     customerEmail: string;
   }) {
+    const frontendUrl =
+      Environment.getOptionalVar('FRONTEND_URL') || 'http://localhost:3000';
+
     if (this.mockMode) {
       this.logger.warn(
         `[MOCK] Link de pagamento: R$ ${data.amount} - ${data.description}`,
@@ -94,7 +99,7 @@ export class PaymentsService {
       return {
         success: true,
         preferenceId: `mock-pref-${Date.now()}`,
-        paymentLink: `http://localhost:3000/mock-payment?order=${data.orderId}&amount=${data.amount}`,
+        paymentLink: `${frontendUrl}/confirmacao/${data.orderId}?status=approved&mock=true`,
       };
     }
 
@@ -115,16 +120,17 @@ export class PaymentsService {
           payer: {
             email: data.customerEmail,
           },
+          external_reference: `${data.orderId}:${data.type}`,
           back_urls: {
-            success: `${appUrl}/confirmacao/${data.orderId}?status=success`,
-            failure: `${appUrl}/confirmacao/${data.orderId}?status=failure`,
-            pending: `${appUrl}/confirmacao/${data.orderId}?status=pending`,
+            success: `${frontendUrl}/confirmacao/${data.orderId}?status=success`,
+            failure: `${frontendUrl}/confirmacao/${data.orderId}?status=failure`,
+            pending: `${frontendUrl}/confirmacao/${data.orderId}?status=pending`,
           },
           auto_return: 'approved',
-          metadata: {
-            orderId: data.orderId,
-            type: data.type,
-          },
+          expires: true,
+          expiration_date_to: new Date(
+            Date.now() + 24 * 60 * 60 * 1000,
+          ).toISOString(),
           notification_url: `${appUrl}/api/payments/webhook`,
         },
       });
@@ -153,6 +159,7 @@ export class PaymentsService {
         status: 'approved',
         statusDetail: 'mock_approved',
         amount: 0,
+        externalReference: '',
       };
     }
 
@@ -163,10 +170,37 @@ export class PaymentsService {
         status: payment.status,
         statusDetail: payment.status_detail,
         amount: payment.transaction_amount,
+        externalReference: (payment.external_reference as string) || '',
       };
     } catch (error) {
       this.logger.error(
         'Erro ao buscar pagamento',
+        error instanceof Error ? error.stack : String(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Reembolsar pagamento
+   */
+  async refundPayment(paymentId: string) {
+    if (this.mockMode) {
+      this.logger.warn(`[MOCK] Reembolso do pagamento: ${paymentId}`);
+      return { success: true, refundId: `mock-refund-${Date.now()}` };
+    }
+
+    try {
+      const refund = await this.refundClient!.create({
+        payment_id: Number(paymentId),
+        body: {},
+      });
+
+      this.logger.log(`Reembolso criado: ${refund.id} para pagamento ${paymentId}`);
+      return { success: true, refundId: refund.id?.toString() };
+    } catch (error) {
+      this.logger.error(
+        'Erro ao reembolsar pagamento',
         error instanceof Error ? error.stack : String(error),
       );
       throw error;

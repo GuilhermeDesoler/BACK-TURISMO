@@ -9,6 +9,7 @@ import {
   HttpStatus,
   ForbiddenException,
 } from '@nestjs/common';
+import { FirebaseService } from '../firebase/firebase.service';
 import { OrdersService } from './orders.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -21,7 +22,10 @@ import { CreateOrderDto } from './dto/create-order.dto';
 
 @Controller('orders')
 export class OrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private ordersService: OrdersService,
+    private firebaseService: FirebaseService,
+  ) {}
 
   /**
    * Calcular total do pedido (rota publica)
@@ -77,5 +81,33 @@ export class OrdersController {
     }
 
     return order;
+  }
+
+  /**
+   * Buscar histórico de pagamentos do pedido
+   */
+  @Get(':id/payments')
+  @UseGuards(AuthGuard)
+  async findPayments(@Param('id') id: string, @CurrentUser() user: User) {
+    const order = await this.ordersService.findOne(id);
+
+    if (user.role === UserRole.CLIENT && order.userId !== user.uid) {
+      throw new ForbiddenException(
+        'Você não tem permissão para ver este pedido',
+      );
+    }
+
+    const db = this.firebaseService.getFirestore();
+    const snapshot = await db
+      .collection('orders')
+      .doc(id)
+      .collection('payments')
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    return snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
   }
 }

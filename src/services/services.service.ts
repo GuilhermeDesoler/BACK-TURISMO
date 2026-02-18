@@ -17,7 +17,11 @@ export interface MulterFile {
 
 interface FirestoreServiceData {
   name: string;
+  nameEn?: string;
+  nameEs?: string;
   description: string;
+  descriptionEn?: string;
+  descriptionEs?: string;
   price: number;
   maxPeople: number;
   duration: number;
@@ -37,7 +41,7 @@ export class ServicesService {
   async create(dto: CreateServiceDto): Promise<Service> {
     const db = this.firebaseService.getFirestore();
 
-    const serviceData = {
+    const serviceData: Record<string, unknown> = {
       name: dto.name,
       description: dto.description,
       price: dto.price,
@@ -48,6 +52,10 @@ export class ServicesService {
       imageUrls: dto.imageUrls ?? [],
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
+    if (dto.nameEn) serviceData['nameEn'] = dto.nameEn;
+    if (dto.nameEs) serviceData['nameEs'] = dto.nameEs;
+    if (dto.descriptionEn) serviceData['descriptionEn'] = dto.descriptionEn;
+    if (dto.descriptionEs) serviceData['descriptionEs'] = dto.descriptionEs;
 
     const serviceRef = await db.collection('services').add(serviceData);
     const serviceDoc = await serviceRef.get();
@@ -122,7 +130,11 @@ export class ServicesService {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (dto.name !== undefined) updateData['name'] = dto.name;
+    if (dto.nameEn !== undefined) updateData['nameEn'] = dto.nameEn;
+    if (dto.nameEs !== undefined) updateData['nameEs'] = dto.nameEs;
     if (dto.description !== undefined) updateData['description'] = dto.description;
+    if (dto.descriptionEn !== undefined) updateData['descriptionEn'] = dto.descriptionEn;
+    if (dto.descriptionEs !== undefined) updateData['descriptionEs'] = dto.descriptionEs;
     if (dto.price !== undefined) updateData['price'] = dto.price;
     if (dto.maxPeople !== undefined) updateData['maxPeople'] = dto.maxPeople;
     if (dto.duration !== undefined) updateData['duration'] = dto.duration;

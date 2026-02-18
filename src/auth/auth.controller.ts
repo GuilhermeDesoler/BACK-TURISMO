@@ -41,7 +41,7 @@ export class AuthController {
       email: dto.email,
       name: dto.name,
       phone: dto.phone,
-      cpf: '',
+      cpf: dto.cpf || '',
       role: UserRole.CLIENT,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),

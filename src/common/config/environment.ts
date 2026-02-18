@@ -20,6 +20,14 @@ export const OptionalEnvVars = [
   'TWILIO_WHATSAPP_NUMBER',
   'MERCADOPAGO_ACCESS_TOKEN',
   'MERCADOPAGO_WEBHOOK_SECRET',
+  'FRONTEND_URL',
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_USER',
+  'SMTP_PASS',
+  'SMTP_FROM',
+  'NFE_API_TOKEN',
+  'NFE_API_URL',
 ] as const;
 
 export const EnvVarsValues = [...RequiredEnvVars, ...OptionalEnvVars] as const;

@@ -22,7 +22,7 @@ steps:
       - '--cpu=1'
       - '--min-instances=0'
       - '--max-instances=3'
-      - '--set-env-vars=APP_ENV=production,FIREBASE_PROJECT_ID=turismo-9e70c,FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@turismo-9e70c.iam.gserviceaccount.com,TWILIO_WHATSAPP_NUMBER=+5545988412446,FIRESTORE_DATABASE_ID=teste,APP_URL=https://back-turismo-296326112656.southamerica-east1.run.app,CORS_ORIGINS=https://turismo-9e70c.web.app;https://turismo-9e70c.firebaseapp.com'
+      - '--set-env-vars=APP_ENV=production,FIREBASE_PROJECT_ID=turismo-9e70c,FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@turismo-9e70c.iam.gserviceaccount.com,TWILIO_WHATSAPP_NUMBER=+5545988412446,FIRESTORE_DATABASE_ID=teste,APP_URL=https://back-turismo-296326112656.southamerica-east1.run.app,FRONTEND_URL=https://turismo-9e70c.web.app,CORS_ORIGINS=https://turismo-9e70c.web.app;https://turismo-9e70c.firebaseapp.com'
       - '--set-secrets=FIREBASE_PRIVATE_KEY=firebase-private-key:latest,MERCADOPAGO_ACCESS_TOKEN=mercadopago-access-token:latest,TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest'
 
 images:

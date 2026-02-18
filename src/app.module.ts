@@ -12,6 +12,7 @@ import { SchedulesModule } from './schedules/schedules.module';
 import { HealthModule } from './health/health.module';
 import { TeamsModule } from './teams/teams.module';
 import { ServicesModule } from './services/services.module';
+import { InvoicesModule } from './invoices/invoices.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { ServicesModule } from './services/services.module';
     SchedulesModule,
     TeamsModule,
     ServicesModule,
+    InvoicesModule,
     HealthModule,
   ],
   providers: [

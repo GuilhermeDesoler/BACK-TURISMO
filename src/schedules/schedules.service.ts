@@ -5,9 +5,12 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
+import { Inject, forwardRef } from '@nestjs/common';
 import { FirebaseService } from '../firebase/firebase.service';
 import { TeamsService } from '../teams/teams.service';
+import { OrdersService } from '../orders/orders.service';
 import { ScheduleStatus } from '../common/enums/schedule-status.enum';
+import { OrderStatus } from '../common/enums/order-status.enum';
 import {
   Schedule,
   ScheduleService as ScheduleServiceItem,
@@ -35,6 +38,8 @@ export class SchedulesService {
   constructor(
     private firebaseService: FirebaseService,
     private teamsService: TeamsService,
+    @Inject(forwardRef(() => OrdersService))
+    private ordersService: OrdersService,
   ) {}
 
   /**
@@ -217,6 +222,7 @@ export class SchedulesService {
     teams: Array<{
       teamId: string;
       teamName: string;
+      maxPeople: number;
       allSlots: string[];
       availableSlots: string[];
       occupiedSlots: string[];
@@ -272,6 +278,7 @@ export class SchedulesService {
       return {
         teamId: team.id,
         teamName: team.name,
+        maxPeople: team.maxPeople,
         allSlots,
         availableSlots,
         occupiedSlots,
@@ -295,6 +302,25 @@ export class SchedulesService {
 
     await this.updateStatus(scheduleId, ScheduleStatus.CONFIRMED);
     this.logger.log(`Agendamento ${scheduleId} confirmado`);
+
+    // Atualizar pedido para SCHEDULED se está DEPOSIT_PAID
+    try {
+      const order = await this.ordersService.findOne(schedule.orderId);
+      if (order.status === OrderStatus.DEPOSIT_PAID) {
+        await this.ordersService.updateStatus(
+          schedule.orderId,
+          OrderStatus.SCHEDULED,
+        );
+        this.logger.log(
+          `Pedido ${schedule.orderId} atualizado para SCHEDULED`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        'Erro ao atualizar status do pedido',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**

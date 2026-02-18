@@ -29,6 +29,9 @@ import { ScheduleStatus } from '../common/enums/schedule-status.enum';
 import type { User } from '../common/interfaces/user.interface';
 import { ProcessPaymentDto } from './dto/process-payment.dto';
 import { GenerateFinalPaymentDto } from './dto/generate-final-payment.dto';
+import { DepositLinkDto } from './dto/deposit-link.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
+import type { Order } from '../common/interfaces/order.interface';
 import * as admin from 'firebase-admin';
 
 interface WebhookBody {
@@ -67,6 +70,7 @@ export class PaymentsController {
   @Post('process-deposit')
   @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async processDeposit(
     @Body() dto: ProcessPaymentDto,
     @CurrentUser() user: User,
@@ -234,6 +238,43 @@ export class PaymentsController {
   }
 
   /**
+   * Gerar link de pagamento do depósito (30%) via Mercado Pago Checkout Pro
+   */
+  @Post('deposit-link')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  async createDepositLink(
+    @Body() dto: DepositLinkDto,
+    @CurrentUser() user: User,
+  ) {
+    const { orderId } = dto;
+
+    const order = await this.ordersService.findOne(orderId);
+
+    if (order.userId !== user.uid) {
+      throw new ForbiddenException('Você não tem permissão para este pedido');
+    }
+
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('Pedido já foi processado');
+    }
+
+    const result = await this.paymentsService.createPaymentLink({
+      amount: order.depositAmount,
+      description: `Entrada - Pedido #${orderId.substring(0, 8)}`,
+      orderId,
+      type: 'DEPOSIT',
+      customerEmail: user.email,
+    });
+
+    return {
+      success: true,
+      paymentLink: result.paymentLink,
+    };
+  }
+
+  /**
    * Gerar link de pagamento final (70%)
    * Apenas EMPLOYEE e ADMIN
    */
@@ -241,11 +282,19 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(UserRole.EMPLOYEE, UserRole.ADMIN)
-  async generateFinalPayment(@Body() dto: GenerateFinalPaymentDto) {
+  async generateFinalPayment(
+    @Body() dto: GenerateFinalPaymentDto,
+    @CurrentUser() user: User,
+  ) {
     const { orderId, paymentMethod } = dto;
 
-    // 1. Buscar pedido
+    // 1. Buscar pedido e verificar permissão
     const order = await this.ordersService.findOne(orderId);
+
+    // Apenas admin pode gerar pagamento final de qualquer pedido
+    if (user.role !== UserRole.ADMIN && order.userId !== user.uid) {
+      throw new ForbiddenException('Você não tem permissão para este pedido');
+    }
 
     // Verificar status
     if (order.status === OrderStatus.COMPLETED) {
@@ -308,6 +357,123 @@ export class PaymentsController {
   }
 
   /**
+   * Reembolsar pedido (cancelamento com reembolso)
+   */
+  @Post('refund')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AuthGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  async refundOrder(
+    @Body() dto: RefundOrderDto,
+    @CurrentUser() user: User,
+  ) {
+    const { orderId } = dto;
+    const order = await this.ordersService.findOne(orderId);
+
+    // Apenas dono do pedido ou admin pode reembolsar
+    if (user.role !== UserRole.ADMIN && order.userId !== user.uid) {
+      throw new ForbiddenException('Você não tem permissão para este pedido');
+    }
+
+    // Verificar se pedido pode ser reembolsado
+    if (
+      order.status === OrderStatus.COMPLETED ||
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.REFUNDED
+    ) {
+      throw new BadRequestException(
+        `Pedido não pode ser reembolsado (status: ${order.status})`,
+      );
+    }
+
+    // Se tem depósito pago, reembolsar via Mercado Pago
+    if (
+      order.status === OrderStatus.DEPOSIT_PAID ||
+      order.status === OrderStatus.SCHEDULED
+    ) {
+      // Buscar transactionId do pagamento de depósito
+      const db = this.firebaseService.getFirestore();
+      const paymentsSnap = await db
+        .collection('orders')
+        .doc(orderId)
+        .collection('payments')
+        .where('type', '==', 'DEPOSIT')
+        .where('status', '==', 'COMPLETED')
+        .limit(1)
+        .get();
+
+      if (!paymentsSnap.empty) {
+        const paymentDoc = paymentsSnap.docs[0];
+        const transactionId = paymentDoc.data().transactionId as string;
+
+        if (transactionId && !transactionId.startsWith('mock')) {
+          await this.paymentsService.refundPayment(transactionId);
+        }
+
+        await paymentDoc.ref.update({
+          status: 'REFUNDED',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      // Cancelar agendamentos associados
+      const schedulesSnap = await db
+        .collection('schedules')
+        .where('orderId', '==', orderId)
+        .get();
+
+      for (const doc of schedulesSnap.docs) {
+        const scheduleData = doc.data();
+        if (scheduleData.status !== 'CANCELLED') {
+          await doc.ref.update({
+            status: ScheduleStatus.CANCELLED,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    }
+
+    // Atualizar status do pedido
+    const newStatus =
+      order.status === OrderStatus.PENDING
+        ? OrderStatus.CANCELLED
+        : OrderStatus.REFUNDED;
+
+    await this.ordersService.updateStatus(orderId, newStatus);
+
+    this.logger.log(
+      `Pedido ${orderId} ${newStatus === OrderStatus.REFUNDED ? 'reembolsado' : 'cancelado'} por ${user.uid}`,
+    );
+
+    // Notificar cliente
+    try {
+      const customer = await this.usersService.findOne(order.userId);
+      await this.notificationsService.sendWhatsApp(
+        customer.phone,
+        'order_cancelled',
+        {
+          name: customer.name,
+          orderNumber: orderId.substring(0, 8),
+        },
+      );
+    } catch (error) {
+      this.logger.error(
+        'Erro ao enviar WhatsApp de cancelamento',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    return {
+      success: true,
+      status: newStatus,
+      message:
+        newStatus === OrderStatus.REFUNDED
+          ? 'Pedido reembolsado com sucesso'
+          : 'Pedido cancelado com sucesso',
+    };
+  }
+
+  /**
    * Webhook do Mercado Pago (rota pública, validada por assinatura)
    */
   @Post('webhook')
@@ -335,7 +501,7 @@ export class PaymentsController {
     try {
       const paymentId = data.id;
 
-      // Buscar status do pagamento
+      // Buscar status do pagamento no Mercado Pago
       const paymentStatus =
         await this.paymentsService.getPaymentStatus(paymentId);
 
@@ -343,69 +509,64 @@ export class PaymentsController {
         `Pagamento ${paymentId} - Status: ${paymentStatus.status}`,
       );
 
-      if (paymentStatus.status === 'approved') {
-        const db = this.firebaseService.getFirestore();
-        const paymentsSnapshot = await db
-          .collectionGroup('payments')
-          .where('transactionId', '==', paymentId.toString())
-          .limit(1)
-          .get();
+      if (paymentStatus.status !== 'approved') {
+        return { status: 'ignored' };
+      }
 
-        if (paymentsSnapshot.empty) {
-          this.logger.warn('Pagamento não encontrado no Firestore');
-          return { status: 'not_found' };
-        }
+      // Flow 1: Pagamento direto (process-deposit) — busca por transactionId
+      const db = this.firebaseService.getFirestore();
+      const paymentsSnapshot = await db
+        .collectionGroup('payments')
+        .where('transactionId', '==', paymentId.toString())
+        .limit(1)
+        .get();
 
+      if (!paymentsSnapshot.empty) {
         const paymentDoc = paymentsSnapshot.docs[0];
         const paymentData = paymentDoc.data() as FirestorePaymentData;
         const orderId = paymentDoc.ref.parent.parent?.id ?? '';
 
-        // Idempotência: ignorar se já processado
         if (paymentData.status === 'COMPLETED') {
           this.logger.log(`Pagamento ${paymentId} já processado, ignorando`);
           return { status: 'ok' };
         }
 
-        this.logger.log(`Atualizando pedido ${orderId}`);
+        this.logger.log(`Atualizando pedido ${orderId} (pagamento direto)`);
 
-        // Atualizar status do pagamento
         await paymentDoc.ref.update({
           status: 'COMPLETED',
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        // Se for pagamento final, finalizar pedido
         if (paymentData.type === 'FINAL') {
-          await this.ordersService.updateStatus(orderId, OrderStatus.COMPLETED);
-
-          const order = await this.ordersService.findOne(orderId);
-          const customer = await this.usersService.findOne(order.userId);
-
-          try {
-            await this.notificationsService.sendWhatsApp(
-              customer.phone,
-              'service_completed',
-              {
-                name: customer.name,
-                orderNumber: orderId.substring(0, 8),
-              },
-            );
-
-            await this.ordersService.addNotification(orderId, {
-              type: 'WHATSAPP',
-              message: 'Serviço concluído',
-              status: 'SENT',
-            });
-          } catch (error) {
-            this.logger.error(
-              'Erro ao enviar WhatsApp',
-              error instanceof Error ? error.stack : String(error),
-            );
-          }
+          await this.handleFinalApproved(orderId);
         }
+
+        return { status: 'ok' };
       }
 
-      return { status: 'ok' };
+      // Flow 2: Checkout Pro — usa external_reference (orderId:TYPE)
+      if (paymentStatus.externalReference) {
+        const [orderId, paymentType] =
+          paymentStatus.externalReference.split(':');
+
+        this.logger.log(
+          `Checkout Pro: pedido ${orderId}, tipo ${paymentType}`,
+        );
+
+        if (paymentType === 'DEPOSIT') {
+          await this.handleDepositApproved(orderId, paymentId.toString());
+        } else if (paymentType === 'FINAL') {
+          await this.handleFinalApproved(orderId);
+        }
+
+        return { status: 'ok' };
+      }
+
+      this.logger.warn(
+        `Pagamento ${paymentId} aprovado mas sem referência no Firestore`,
+      );
+      return { status: 'not_found' };
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : 'Erro desconhecido';
@@ -417,6 +578,184 @@ export class PaymentsController {
     }
   }
 
+  /**
+   * Processar depósito aprovado via Checkout Pro (webhook)
+   */
+  private async handleDepositApproved(
+    orderId: string,
+    transactionId: string,
+  ): Promise<void> {
+    const order = await this.ordersService.findOne(orderId);
+
+    // Idempotência
+    if (order.status !== OrderStatus.PENDING) {
+      this.logger.log(
+        `Pedido ${orderId} já processado (${order.status}), ignorando`,
+      );
+      return;
+    }
+
+    // Agrupar items por (scheduledDate + teamId + timeSlot)
+    const groupMap = this.groupOrderItems(order);
+
+    // Verificar conflitos
+    for (const group of groupMap.values()) {
+      const hasConflict = await this.schedulesService.checkConflict(
+        group.teamId,
+        group.scheduledDate,
+        group.timeSlot,
+      );
+      if (hasConflict) {
+        this.logger.error(
+          `Conflito de agendamento para pedido ${orderId}: ${group.timeSlot}`,
+        );
+        // Não podemos lançar exceção no webhook, apenas logar
+        return;
+      }
+    }
+
+    // Transação atômica
+    const db = this.firebaseService.getFirestore();
+
+    await db.runTransaction((transaction) => {
+      const orderRef = db.collection('orders').doc(orderId);
+
+      transaction.update(orderRef, {
+        status: OrderStatus.DEPOSIT_PAID,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      const paymentRef = orderRef.collection('payments').doc();
+      transaction.set(paymentRef, {
+        amount: order.depositAmount,
+        type: 'DEPOSIT',
+        status: 'COMPLETED',
+        paymentMethod: 'mercadopago_checkout',
+        transactionId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      for (const group of groupMap.values()) {
+        const scheduleRef = db.collection('schedules').doc();
+        transaction.set(scheduleRef, {
+          orderId,
+          userId: order.userId,
+          teamId: group.teamId,
+          scheduledDate: admin.firestore.Timestamp.fromDate(
+            group.scheduledDate,
+          ),
+          timeSlot: group.timeSlot,
+          status: ScheduleStatus.PENDING,
+          notes: '',
+          peopleCount: order.peopleCount,
+          services: group.services,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      return Promise.resolve();
+    });
+
+    this.logger.log(`Depósito aprovado para pedido ${orderId}`);
+
+    // Enviar WhatsApp
+    try {
+      const userData = await this.usersService.findOne(order.userId);
+
+      const datesSummary = Array.from(groupMap.values())
+        .map(
+          (g) =>
+            `${g.scheduledDate.toLocaleDateString('pt-BR')} às ${g.timeSlot}`,
+        )
+        .join('\n');
+
+      const documents = order.items
+        .map((item) => `• ${item.serviceName}`)
+        .join('\n');
+
+      await this.notificationsService.sendWhatsApp(
+        userData.phone,
+        'order_confirmation',
+        {
+          name: userData.name,
+          orderNumber: orderId.substring(0, 8),
+          scheduledDate: datesSummary,
+          depositPaid: order.depositAmount.toFixed(2),
+          documents: documents || '• RG ou CNH\n• CPF',
+        },
+      );
+
+      await this.ordersService.addNotification(orderId, {
+        type: 'WHATSAPP',
+        message: 'Confirmação de pedido enviada',
+        status: 'SENT',
+      });
+    } catch (error) {
+      this.logger.error(
+        'Erro ao enviar WhatsApp',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Processar pagamento final aprovado (webhook)
+   */
+  private async handleFinalApproved(orderId: string): Promise<void> {
+    await this.ordersService.updateStatus(orderId, OrderStatus.COMPLETED);
+
+    const order = await this.ordersService.findOne(orderId);
+    const customer = await this.usersService.findOne(order.userId);
+
+    try {
+      await this.notificationsService.sendWhatsApp(
+        customer.phone,
+        'service_completed',
+        {
+          name: customer.name,
+          orderNumber: orderId.substring(0, 8),
+        },
+      );
+
+      await this.ordersService.addNotification(orderId, {
+        type: 'WHATSAPP',
+        message: 'Serviço concluído',
+        status: 'SENT',
+      });
+    } catch (error) {
+      this.logger.error(
+        'Erro ao enviar WhatsApp',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Agrupar items do pedido por (scheduledDate + teamId + timeSlot)
+   */
+  private groupOrderItems(order: Order): Map<string, ScheduleGroup> {
+    const groupMap = new Map<string, ScheduleGroup>();
+
+    for (const item of order.items) {
+      const key = `${item.scheduledDate}|${item.teamId}|${item.timeSlot}`;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          scheduledDate: new Date(item.scheduledDate),
+          teamId: item.teamId,
+          timeSlot: item.timeSlot,
+          services: [],
+        });
+      }
+      groupMap.get(key)!.services.push({
+        serviceId: item.serviceId,
+        serviceName: item.serviceName,
+      });
+    }
+
+    return groupMap;
+  }
+
   private validateWebhookSignature(
     signature: string,
     requestId: string,
@@ -424,8 +763,15 @@ export class PaymentsController {
   ): boolean {
     const secret = Environment.getOptionalVar('MERCADOPAGO_WEBHOOK_SECRET');
 
-    // Se não há segredo configurado, pular validação (ambiente dev)
-    if (!secret) return true;
+    // Em produção, rejeitar webhooks sem segredo configurado
+    if (!secret) {
+      const env = Environment.getOptionalVar('APP_ENV');
+      if (env === 'production') {
+        this.logger.error('MERCADOPAGO_WEBHOOK_SECRET não configurado em produção');
+        return false;
+      }
+      return true;
+    }
 
     if (!signature || !requestId) return false;
 

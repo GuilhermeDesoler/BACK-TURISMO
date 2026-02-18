@@ -11,6 +11,7 @@ import * as admin from 'firebase-admin';
 interface FirestoreTeamData {
   name: string;
   isActive: boolean;
+  maxPeople: number;
   operatingHours: TeamOperatingHours[];
   createdAt: admin.firestore.Timestamp;
   updatedAt: admin.firestore.Timestamp;
@@ -25,6 +26,7 @@ export class TeamsService {
   async create(data: {
     name: string;
     isActive?: boolean;
+    maxPeople: number;
     operatingHours: TeamOperatingHours[];
   }): Promise<string> {
     this.validateOperatingHours(data.operatingHours);
@@ -41,6 +43,7 @@ export class TeamsService {
     const teamRef = await db.collection('teams').add({
       name: data.name,
       isActive: data.isActive ?? true,
+      maxPeople: data.maxPeople,
       operatingHours: plainHours,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -87,6 +90,7 @@ export class TeamsService {
     data: {
       name?: string;
       isActive?: boolean;
+      maxPeople?: number;
       operatingHours?: TeamOperatingHours[];
     },
   ): Promise<void> {
@@ -108,6 +112,7 @@ export class TeamsService {
 
     if (data.name !== undefined) updateData['name'] = data.name;
     if (data.isActive !== undefined) updateData['isActive'] = data.isActive;
+    if (data.maxPeople !== undefined) updateData['maxPeople'] = data.maxPeople;
     if (data.operatingHours !== undefined)
       updateData['operatingHours'] = data.operatingHours.map((h) => ({
         dayOfWeek: h.dayOfWeek,
@@ -174,6 +179,7 @@ export class TeamsService {
       id: doc.id,
       name: data.name,
       isActive: data.isActive,
+      maxPeople: data.maxPeople || 0,
       operatingHours: data.operatingHours || [],
       createdAt: data.createdAt.toDate(),
       updatedAt: data.updatedAt.toDate(),

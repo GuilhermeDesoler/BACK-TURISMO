@@ -1,17 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Twilio } from 'twilio';
+import * as nodemailer from 'nodemailer';
 import { Environment } from '../common/config/environment';
 
 export type WhatsAppTemplate =
   | 'order_confirmation'
   | 'final_payment'
-  | 'service_completed';
+  | 'service_completed'
+  | 'order_cancelled'
+  | 'invoice_sent';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
   private twilioClient: Twilio | null = null;
   private whatsappNumber = '';
+  private emailTransporter: nodemailer.Transporter | null = null;
+  private emailFrom = '';
 
   constructor() {
     const sid = Environment.getOptionalVar('TWILIO_ACCOUNT_SID');
@@ -24,6 +29,27 @@ export class NotificationsService {
     } else {
       this.logger.warn(
         'Twilio nao configurado - notificacoes WhatsApp desabilitadas',
+      );
+    }
+
+    const smtpHost = Environment.getOptionalVar('SMTP_HOST');
+    const smtpPort = Environment.getOptionalVar('SMTP_PORT');
+    const smtpUser = Environment.getOptionalVar('SMTP_USER');
+    const smtpPass = Environment.getOptionalVar('SMTP_PASS');
+    const smtpFrom = Environment.getOptionalVar('SMTP_FROM');
+
+    if (smtpHost && smtpUser && smtpPass) {
+      this.emailTransporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: Number(smtpPort) || 587,
+        secure: (Number(smtpPort) || 587) === 465,
+        auth: { user: smtpUser, pass: smtpPass },
+      });
+      this.emailFrom = smtpFrom || smtpUser;
+      this.logger.log('Email configurado via SMTP');
+    } else {
+      this.logger.warn(
+        'SMTP nao configurado - notificacoes por email desabilitadas',
       );
     }
   }
@@ -68,6 +94,31 @@ Esperamos que tenha aproveitado bastante! 🌟
 
 Avalie nossa experiência e volte sempre!
     `.trim(),
+
+    order_cancelled: `
+Olá {name},
+
+Seu pedido #{orderNumber} foi cancelado.
+
+Caso tenha sido realizado algum pagamento, o reembolso será processado em até 10 dias úteis.
+
+Em caso de dúvidas, entre em contato conosco.
+
+Obrigado pela compreensão!
+    `.trim(),
+
+    invoice_sent: `
+Olá {name}! 📄
+
+Sua Nota Fiscal referente ao pedido #{orderNumber} foi emitida!
+
+Número da NF-e: {invoiceNumber}
+Valor: R$ {amount}
+
+{deliveryNote}
+
+Obrigado pela preferência! 🌴
+    `.trim(),
   };
 
   async sendWhatsApp(
@@ -102,6 +153,40 @@ Avalie nossa experiência e volte sempre!
     } catch (error) {
       this.logger.error(
         'Erro ao enviar WhatsApp',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  async sendEmail(
+    to: string,
+    subject: string,
+    html: string,
+    attachments?: Array<{
+      filename: string;
+      content: Buffer;
+      contentType?: string;
+    }>,
+  ): Promise<void> {
+    if (!this.emailTransporter) {
+      this.logger.warn(
+        `[MOCK] Email para ${to} (assunto: ${subject})`,
+      );
+      return;
+    }
+
+    try {
+      await this.emailTransporter.sendMail({
+        from: this.emailFrom,
+        to,
+        subject,
+        html,
+        attachments,
+      });
+      this.logger.log(`Email enviado para ${to}`);
+    } catch (error) {
+      this.logger.error(
+        'Erro ao enviar email',
         error instanceof Error ? error.stack : String(error),
       );
     }

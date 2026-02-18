@@ -12,18 +12,38 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateServiceDto {
   @ApiProperty({
-    description: 'Nome do serviço',
+    description: 'Nome do serviço (pt-BR)',
     example: 'Passeio de Barco',
   })
   @IsString()
   name: string;
 
+  @ApiPropertyOptional({ description: 'Nome em inglês', example: 'Boat Tour' })
+  @IsString()
+  @IsOptional()
+  nameEn?: string;
+
+  @ApiPropertyOptional({ description: 'Nome em espanhol', example: 'Paseo en Barco' })
+  @IsString()
+  @IsOptional()
+  nameEs?: string;
+
   @ApiProperty({
-    description: 'Descrição detalhada do serviço',
+    description: 'Descrição detalhada do serviço (pt-BR)',
     example: 'Passeio de 3 horas pelas ilhas',
   })
   @IsString()
   description: string;
+
+  @ApiPropertyOptional({ description: 'Descrição em inglês' })
+  @IsString()
+  @IsOptional()
+  descriptionEn?: string;
+
+  @ApiPropertyOptional({ description: 'Descrição em espanhol' })
+  @IsString()
+  @IsOptional()
+  descriptionEs?: string;
 
   @ApiProperty({
     description: 'Preço do serviço em reais',
